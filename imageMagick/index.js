@@ -4,15 +4,16 @@
  * For more information on GCFs, see https://cloud.google.com/functions/
  *
  * When an image is added to Google Cloud Storage and triggers this GCF, 
- * this tells the Blitline image processing service to extract its EXIF
- * and IPTC metadata.
- *
- * The Blitline service does the processing and calls back ANOTHER GCF
- * with the results.
+ * this SHOULD tell ImageMagick to extract the EXIF and IPTC metadata,
+ * but I broke it and it's not yet working again.
  */
 'use strict';
 
 const http = require('http');
+const im = require('imagemagick');
+const gcs = require('@google-cloud/storage')();
+const exec = require('child-process-promise').exec;
+const LOCAL_TMP_FOLDER = '/tmp/';
 
 /**
  * Google Cloud Function to be triggered by Cloud Storage.
@@ -116,3 +117,36 @@ exports.helloGCS = function helloGCS (event, callback) {
 	// Return success
 	callback();
 };
+
+/**
+ * OBSOLETE -- NOT USED
+ *
+ * Extract image metadata using ImageMagick
+ */
+function extractMetadata(file) {
+	const filePath = file.name;
+	const fileName = filePath.split('/').pop();
+	const tempLocalFile = `${LOCAL_TMP_FOLDER}${fileName}`;
+	console.log('Downloading image from bucket to temp file: ', tempLocalFile);
+
+	// Download image from bucket
+	const bucket = gcs.bucket(file.bucket);
+
+	// console.log('Bucket: ', bucket);
+
+	bucket.file(filePath).download({destination: tempLocalFile}).then(() => {
+		console.log('Image is downloaded from bucket');
+
+		// Get metadata from image.
+		exec(`identify -format "Keywords %[IPTC:2:25] Headline %[IPTC:2:105] Title %[IPTC:2:05] Caption %[IPTC:2:120]" "${tempLocalFile}"`)
+			.then(function (result) {
+				var stdout = result.stdout;
+        		var stderr = result.stderr;
+				console.log('Metadata: ', stdout);
+				console.log('stderr: ', stderr);
+			})
+		    .catch(function (err) {
+		        console.error('ERROR: ', err);
+		    });
+	});
+}
