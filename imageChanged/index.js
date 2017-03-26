@@ -1,17 +1,25 @@
 /**
- * This is a Google Cloud Function.   When an image is added to Google Cloud Storage 
- * and triggers this Cloud Function, it uses Cloud Function's built-in imagemagick 
- * to read the image's EXIF metadata.
+ * This is a Google Cloud Function.   
+ *
+ * For more information on GCFs, see https://cloud.google.com/functions/
+ *
+ * When an image is added to Google Cloud Storage and triggers this GCF, 
+ * this tells the Blitline image processing service to extract its EXIF
+ * and IPTC metadata.
+ *
+ * The Blitline service does the processing and calls back ANOTHER GCF
+ * with the results.
  */
 'use strict';
 
+const http = require('http');
 const im = require('imagemagick');
 const gcs = require('@google-cloud/storage')();
 const exec = require('child-process-promise').exec;
 const LOCAL_TMP_FOLDER = '/tmp/';
 
 /**
- * Background Cloud Function to be triggered by Cloud Storage.
+ * Google Cloud Function to be triggered by Cloud Storage.
  *
  * @param {object} event The Cloud Functions event.
  * @param {function} The callback function.
@@ -45,7 +53,7 @@ exports.helloGCS = function helloGCS (event, callback) {
 	} 
 
 	console.log(`File ${file.name} uploaded. It's of type: ${file.contentType}`);
-	console.log("File resource state: ", file.resourceState);
+	//console.log("File resource state: ", file.resourceState);
 
 	const isImage = file.contentType.startsWith('image/');
 	if (!isImage) {
@@ -57,6 +65,17 @@ exports.helloGCS = function helloGCS (event, callback) {
 	//console.log("File metadata: " + file.metadata);
 
 	// Get the image's EXIF and IPTC metadata from the blitline image processing service
+
+	console.log("Sending job to Blitline ", blitline_job_data);
+
+    var request_options = {
+        host: 'api.blitline.com',
+        port: 80,
+        method:"POST",
+        path: '/job'
+    };
+
+    // The Blitline job data that we'll be POSTing to them
 	var blitline_job_data = {
 	    "application_id": "7hZLs3W6e4VVWTec0XksLoQ",
 	    "src": encodeURIComponent(file.mediaLink),
@@ -68,13 +87,43 @@ exports.helloGCS = function helloGCS (event, callback) {
 	    }
 	};
 
-	sendToBlitline(blitline_job_data);
+    var req = http.request(request_options, function(res) {
+    	var responseBody = '';
+
+        res.on('data', function(chunk) {
+            responseBody += chunk;
+        });
+
+		res.on('end', function() {
+	    	if (res.statusCode !== 200) {
+	    		console.log("Error: ", responseBody);
+	    	}
+	    	else  {
+		    	var blitlineResponseObj = JSON.parse(responseBody);
+	            // console.log("Blitline response: ", blitlineResponseObj);
+				if (blitlineResponseObj.results.error) {
+	            	console.log('Error submitting job to Blitline: ', blitlineResponseObj.results.error)
+	            }
+	            else {
+	            	console.log('Success sumitting job to Blitline: ', blitlineResponseObj.results);
+	            }
+	    	}
+		});
+
+    }).on('error', function(e) {
+        console.log("Error connecting to Blitline: " + e.message);
+    });
+
+    req.write("json="+ JSON.stringify(blitline_job_data));
+    req.end();
 
 	// Return success
 	callback();
 };
 
 /**
+ * OBSOLETE -- NOT USED
+ *
  * Extract image metadata using ImageMagick
  */
 function extractMetadata(file) {
@@ -103,50 +152,4 @@ function extractMetadata(file) {
 		        console.error('ERROR: ', err);
 		    });
 	});
-}
-
-/**
- * Send an image processing job to Blitline
- */
-function sendToBlitline(job_data) {
-	console.log("Sending job to Blitline ", job_data);
-
-    var http = require('http');
-
-    var options = {
-        host: 'api.blitline.com',
-        port: 80,
-        method:"POST",
-        path: '/job'
-    };
-
-    var req = http.request(options, function(res) {
-    	var responseBody = '';
-
-        res.on("data", function(chunk) {
-            responseBody += chunk;
-        });
-
-		res.on('end', function() {
-	    	if (res.statusCode !== 200) {
-	    		console.log("Error: ", responseBody);
-	    	}
-	    	else  {
-		    	var blitlineResponseObj = JSON.parse(responseBody);
-	            // console.log("Blitline response: ", blitlineResponseObj);
-				if (blitlineResponseObj.results.error) {
-	            	console.log('Error submitting job to Blitline: ', blitlineResponseObj.results.error)
-	            }
-	            else {
-	            	console.log('Success sumitting job to Blitline: ', blitlineResponseObj.results);
-	            }
-	    	}
-		});
-
-    }).on('error', function(e) {
-        console.log("Error connecting to Blitline: " + e.message);
-    });
-
-    req.write("json="+ JSON.stringify(job_data));
-    req.end();
 }
