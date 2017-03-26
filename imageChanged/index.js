@@ -22,54 +22,66 @@ exports.helloGCS = function helloGCS (event, callback) {
 	//console.log('Event type: ', event.eventType);
 	//console.log('Event resource: ', event.resource);
 
-	// The event.data is an Objects resource as described here:
+	// The event.data is Google Cloud Storage Objects resource as described here:
 	// https://cloud.google.com/storage/docs/json_api/v1/objects#resource
 	const file = event.data;
 	
 	if (file.name === undefined) {
-		console.log('Got one of those weird undefined files I get during function deployment.  Ignoring.');
+		console.log('Got an undefined file.  Ignoring.');
+		callback();
 		return;
 	}
 
 	const filePath = file.name;
 	const fileName = filePath.split('/').pop();
-	const tempLocalFile = `${LOCAL_TMP_FOLDER}${fileName}`;
 	const isDelete = file.resourceState === 'not_exists';
 
-	// Stop processing if the file was deleted
+	// Stop if file was deleted
 	// We only care about added or modified files
 	if (isDelete) {
 		console.log(`Yo! File ${file.name} deleted.`);
+		callback();
 		return;
 	} 
 
-	console.log(`Yo! File ${file.name} uploaded. It is of type: `, file.contentType);
+	console.log(`File ${file.name} uploaded. It's of type: ${file.contentType}`);
 	console.log("File resource state: ", file.resourceState);
 
 	const isImage = file.contentType.startsWith('image/');
 	if (!isImage) {
 		console.log('File is not an image, ignoring.')
+		callback();
 		return;
 	}
 
 	//console.log("File metadata: " + file.metadata);
 
-	// Get the image metadata from blitline
+	// Get the image's EXIF and IPTC metadata from the blitline image processing service
 	var blitline_job_data = {
 	    "application_id": "7hZLs3W6e4VVWTec0XksLoQ",
-	    "src": "https://00e9e64bac5a7146feed4f36176dca28613b58a6cf62cb6fd3-apidata.googleusercontent.com/download/storage/v1/b/cloud-functions-test1-upload/o/gcf-test1.png?qk=AD5uMEuBzVuL8ENGUB6kbDB4bQ7xqjwL7-UyGM3_HWcywC4ypNZ25YFsU79kpNURfProFNguwnaw0tDENu0OE0CMtzHb5RKbm1GbStgY0lj89s8F_b6ZsOi7DR5V4qe6ZUeOBCyBK3HZ42ZfBETbvdo9eZssKcgqo_4WvRCu7j8eJ6wzsA5RRLk61uEiQ6poq8RStX-ttBs1Ym0QKddBjQWSLzMgoyxHxYcx-S5NKk7DC0Q3ncmEfWehfafOXDF712mdA8SgMrmMmD5rnavTnNxkH8_1Tb6ivz5bMIhdnfTFfwDb1rrtnQXqasCJsj6Obn-QJZr_NVh-oueXtQf568PZTt0tH1mheqbLfG9dKaWwGeE1kv4RmbAUUghDS-5Qb2J1R081g09xh4IDLJqRxlebT5AyFltSDTYiz34KQoCjVabNRdOw3wfd4rJX_rKCAHlZRFjm1tSFNkxxQWI72RrB7VjChdIPznM77pZSUhEsTjl-sy94V6iWxdCMLCX7IMe1tZiMmcQnrKa_MmDkmzNb-F3F4OTBQhyzXZDoEGEGYCtqRiAxo4GVT6QVbydd2zBg6lwiBAmA7Cr-nXEob5dYECwuZ3tmb7zv7E2oGNQN1Z-pT_7jj8y31DLbAJDahyROiuMmogt-RY_zfLOy4d5ik3uU9bmPR0sg3zMVyP3pytc7xJlCOONP8xAyQSBfDvCMAifmeCeUqGtggq8aklAlftG2TCnYPJ_2TyujFKV6ud-JlMOJlHZddSwuae3bg9mTy_cpOH8ssiaKu9uxDVsZRjN0e7XsEUUGVKx076e_vcWw3fyYaRs",
-	    "v" : 1.21,
+	    "src": encodeURIComponent(file.mediaLink),
+	    "v": 1.21,
+	    "postback_url": "https://us-central1-cloud-functions-test-1.cloudfunctions.net/imageMetadata",
 	    "pre_process":
 	    {
 	        "peek": true
 	    }
 	};
 
-	sendHttpPostToBlitline(blitline_job_data);
+	sendToBlitline(blitline_job_data);
 
-	return;
+	// Return success
+	callback();
+};
 
-	console.log('Downloading image from bucket to: ', tempLocalFile);
+/**
+ * Extract image metadata using ImageMagick
+ */
+function extractMetadata(file) {
+	const filePath = file.name;
+	const fileName = filePath.split('/').pop();
+	const tempLocalFile = `${LOCAL_TMP_FOLDER}${fileName}`;
+	console.log('Downloading image from bucket to temp file: ', tempLocalFile);
 
 	// Download image from bucket
 	const bucket = gcs.bucket(file.bucket);
@@ -91,17 +103,14 @@ exports.helloGCS = function helloGCS (event, callback) {
 		        console.error('ERROR: ', err);
 		    });
 	});
-
-	// Return success.  Could also have just ended with no callback
-	callback();
-};
-
-
+}
 
 /**
- * Function to post an image processing job to Blitline
+ * Send an image processing job to Blitline
  */
-function sendHttpPostToBlitline(job_data) {
+function sendToBlitline(job_data) {
+	console.log("Sending job to Blitline ", job_data);
+
     var http = require('http');
 
     var options = {
@@ -112,37 +121,30 @@ function sendHttpPostToBlitline(job_data) {
     };
 
     var req = http.request(options, function(res) {
-            res.on("data", function(chunk) {
-            //console.log("Blitline response data", chunk);
+    	var responseBody = '';
 
-            var blitlineResponseObj = JSON.parse(chunk);
-
-            console.log("Response object: ", blitlineResponseObj);
-
-            //console.log(typeof chunk);
-
-   //          for(var propertyName in chunk) {
-   //          	console.log("property: ", propertyName, " value: ", chunk[propertyName]);
-			// }
-
-            var job_id = blitlineResponseObj.results.job_id;
-
-            console.log('got my job ID: ', job_id);
-
-            var options = {
-			  host: 'cache.blitline.com',
-			  port: 80,
-			  path: '/listen/'+job_id
-			};
-
-			http.get(options, function(res) {
-			  res.on("data", function(chunk) {
-			    console.log("Data=" + chunk);
-			  });
-			})
+        res.on("data", function(chunk) {
+            responseBody += chunk;
         });
+
+		res.on('end', function() {
+	    	if (res.statusCode !== 200) {
+	    		console.log("Error: ", responseBody);
+	    	}
+	    	else  {
+		    	var blitlineResponseObj = JSON.parse(responseBody);
+	            // console.log("Blitline response: ", blitlineResponseObj);
+				if (blitlineResponseObj.results.error) {
+	            	console.log('Error submitting job to Blitline: ', blitlineResponseObj.results.error)
+	            }
+	            else {
+	            	console.log('Success sumitting job to Blitline: ', blitlineResponseObj.results);
+	            }
+	    	}
+		});
+
     }).on('error', function(e) {
-        console.log("Got error: " + e.message);
+        console.log("Error connecting to Blitline: " + e.message);
     });
 
     req.write("json="+ JSON.stringify(job_data));
