@@ -20,7 +20,7 @@ const http = require('http');
  * @param {object} event The Cloud Functions event.
  * @param {function} The callback function.
  */
-exports.helloGCS = function helloGCS (event, callback) {
+exports.processImageWithBlitline = function processImageWithBlitline(event, callback) {
 	// The structure of the event parameter is described here:
 	// https://cloud.google.com/functions/docs/writing/background
 	//console.log('Event type: ', event.eventType);
@@ -73,10 +73,15 @@ exports.helloGCS = function helloGCS (event, callback) {
 
     // The Blitline job data that we'll be POSTing to them
 	var blitline_job_data = {
-	    "application_id": "7hZLs3W6e4VVWTec0XksLoQ",
+		// Dean's personal Blitline Application ID
+	    "application_id": "7hZLs3W6e4VVWTec0XksLoQ", 
+	    // URL where Blitline can download the image
 	    "src": encodeURIComponent(file.mediaLink),
-	    "v": 1.21,
+	    // URL Blitline will post the metadata back to.  This is the HTTP endpoint of another GCF function.
 	    "postback_url": "https://us-central1-cloud-functions-test-1.cloudfunctions.net/imageMetadata",
+	    // Version of the Blitline API
+	    "v": 1.21,
+	    // Tells Blitline to 'peek' at the image's headers without downloading the actual image data
 	    "pre_process":
 	    {
 	        "peek": true
